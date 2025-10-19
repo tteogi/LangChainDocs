@@ -28,7 +28,7 @@ with header_container:
         }}
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.title(f"🤖 {APP_TITLE}")
 
@@ -47,15 +47,32 @@ with st.sidebar:
     st.divider()
     st.header("설정")
 
-    model_type = st.selectbox("모델 유형", ["OpenAI", "Ollama"])
+    model_type = st.selectbox("모델 유형", ["Claude", "OpenAI", "Ollama"])
 
     if model_type == "OpenAI":
-        openai_api_key = st.text_input(
+        api_key = st.text_input(
             "OpenAI API Key", type="password", value=os.getenv("OPENAI_API_KEY", "")
         )
-        model_name = st.selectbox("모델 선택", ["gpt-5", "gpt-5-mini"])
+        model_name = st.selectbox(
+            "모델 선택", ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+        )
+    elif model_type == "Claude":
+        api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            value=os.getenv("ANTHROPIC_API_KEY", ""),
+        )
+        model_name = st.selectbox(
+            "모델 선택",
+            [
+                "claude-sonnet-4-5-20250929",
+                "claude-3-5-sonnet-20241022",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+            ],
+        )
     else:
-        openai_api_key = None
+        api_key = None
         model_name = st.text_input("Ollama 모델 이름", value="llama2")
         st.info("Ollama가 로컬에서 실행 중인지 확인하세요.")
 
@@ -70,16 +87,22 @@ with st.sidebar:
 
     if st.button("문서 처리", type="primary"):
         if uploaded_files:
-            if model_type == "OpenAI" and not openai_api_key:
-                st.error("OpenAI API 키를 먼저 입력해주세요! 🔑")
+            if model_type in ["OpenAI", "Claude"] and not api_key:
+                st.error(f"{model_type} API 키를 먼저 입력해주세요! 🔑")
             else:
                 with st.spinner("문서를 처리하는 중..."):
                     try:
                         documents = load_documents(uploaded_files)
 
                         if documents:
+                            # 임베딩은 여전히 OpenAI를 사용 (Claude는 임베딩을 제공하지 않음)
+                            embedding_api_key = (
+                                api_key
+                                if model_type == "OpenAI"
+                                else os.getenv("OPENAI_API_KEY")
+                            )
                             st.session_state.vectorstore_manager.create_vectorstore(
-                                documents, openai_api_key
+                                documents, embedding_api_key
                             )
                             st.session_state.documents_loaded = True
                             st.session_state.messages = []
@@ -87,7 +110,9 @@ with st.sidebar:
                                 f"좋아요! 📚 {len(documents)}개의 문서 청크가 준비되었어요. 이제 질문해주세요!"
                             )
                         else:
-                            st.error("문서를 읽을 수 없어요. 파일 형식을 확인해주세요! 📄")
+                            st.error(
+                                "문서를 읽을 수 없어요. 파일 형식을 확인해주세요! 📄"
+                            )
                     except Exception as e:
                         st.error(f"오류가 발생했어요: {str(e)}")
         else:
@@ -118,32 +143,34 @@ if prompt := st.chat_input("질문을 입력하세요"):
             response = "앗, 아직 문서가 업로드되지 않았어요! 😊 왼쪽 사이드바에서 문서를 먼저 업로드해주시면 질문에 답변해드릴게요."
             st.markdown(response)
         else:
-            if model_type == "OpenAI" and not openai_api_key:
-                response = "OpenAI API 키가 필요해요. 왼쪽 사이드바에서 API 키를 입력해주세요! 🔑"
+            if model_type in ["OpenAI", "Claude"] and not api_key:
+                response = f"{model_type} API 키가 필요해요. 왼쪽 사이드바에서 API 키를 입력해주세요! 🔑"
                 st.markdown(response)
             else:
                 try:
                     qa_chain = st.session_state.vectorstore_manager.get_qa_chain(
-                        model_name, model_type, openai_api_key
+                        model_name, model_type, api_key
                     )
 
                     if qa_chain:
                         start_time = time.time()
-                        
-                        with st.status("답변을 생성하고 있어요... 🤔", expanded=True) as status:
+
+                        with st.status(
+                            "답변을 생성하고 있어요... 🤔", expanded=True
+                        ) as status:
                             st.write("📄 문서 검색 중...")
                             search_start = time.time()
-                            
+
                             result = qa_chain.invoke({"query": prompt})
                             response = result["result"]
-                            
+
                             end_time = time.time()
                             total_time = end_time - start_time
-                            
+
                             status.update(
-                                label=f"답변 완료! ✨ (소요시간: {total_time:.2f}초)", 
-                                state="complete", 
-                                expanded=False
+                                label=f"답변 완료! ✨ (소요시간: {total_time:.2f}초)",
+                                state="complete",
+                                expanded=False,
                             )
 
                         if (
@@ -155,15 +182,24 @@ if prompt := st.chat_input("질문을 입력하세요"):
                             st.markdown(response)
                         else:
                             st.markdown(response)
-                            
+
                             st.caption(f"⏱️ 처리 시간: {total_time:.2f}초")
 
                             if result.get("source_documents"):
                                 with st.expander("참조 문서"):
                                     for i, doc in enumerate(result["source_documents"]):
-                                        source_file = doc.metadata.get("source", "알 수 없음")
+                                        source_file = doc.metadata.get(
+                                            "source", "알 수 없음"
+                                        )
                                         page = doc.metadata.get("page", "")
-                                        st.markdown(f"**출처 {i+1}:** {source_file}" + (f" (페이지 {page + 1})" if page != "" else ""))
+                                        st.markdown(
+                                            f"**출처 {i+1}:** {source_file}"
+                                            + (
+                                                f" (페이지 {page + 1})"
+                                                if page != ""
+                                                else ""
+                                            )
+                                        )
                                         st.markdown(doc.page_content[:300] + "...")
                     else:
                         response = "문서 처리에 문제가 있는 것 같아요. 문서를 다시 업로드해보시겠어요?"

@@ -5,6 +5,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_community.llms import Ollama
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.retrievers import ContextualCompressionRetriever
@@ -21,56 +22,60 @@ class VectorStoreManager:
             chunk_size=1500,
             chunk_overlap=400,
             length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            separators=["\n\n", "\n", ". ", " ", ""],
         )
-    
-    def create_vectorstore(self, documents: List[Document], openai_api_key: Optional[str]):
+
+    def create_vectorstore(
+        self, documents: List[Document], openai_api_key: Optional[str]
+    ):
         if not documents:
             return None
-        
+
         splits = self.text_splitter.split_documents(documents)
-        
+
         if openai_api_key:
             os.environ["OPENAI_API_KEY"] = openai_api_key
         embeddings = OpenAIEmbeddings()
-        self.vectorstore = Chroma.from_documents(
-            documents=splits,
-            embedding=embeddings
-        )
-        
+        self.vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+
         return self.vectorstore
-    
+
     def get_retriever(self):
         if not self.vectorstore:
             return None
-        
+
         retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={
-                "k": 8
-            }
+            search_type="similarity", search_kwargs={"k": 8}
         )
-        
+
         return retriever
-    
-    def get_llm(self, model_name: str, model_type: str, openai_api_key: Optional[str] = None, streaming: bool = False):
+
+    def get_llm(
+        self,
+        model_name: str,
+        model_type: str,
+        api_key: Optional[str] = None,
+        streaming: bool = False,
+    ):
         if model_type == "OpenAI":
-            if openai_api_key:
-                os.environ["OPENAI_API_KEY"] = openai_api_key
-            return ChatOpenAI(
-                model=model_name,
-                temperature=0.5,
-                streaming=streaming
-            )
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+            return ChatOpenAI(model=model_name, temperature=0.5, streaming=streaming)
+        elif model_type == "Claude":
+            if api_key:
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+            return ChatAnthropic(model=model_name, temperature=0.5, streaming=streaming)
         else:
             return Ollama(model=model_name, temperature=0.5)
-    
-    def get_qa_chain(self, model_name: str, model_type: str, openai_api_key: Optional[str] = None):
+
+    def get_qa_chain(
+        self, model_name: str, model_type: str, api_key: Optional[str] = None
+    ):
         if not self.vectorstore:
             return None
-        
-        llm = self.get_llm(model_name, model_type, openai_api_key, streaming=False)
-        
+
+        llm = self.get_llm(model_name, model_type, api_key, streaming=False)
+
         prompt_template = """당신은 친절하고 전문적인 AI 어시스턴트입니다. 
 사용자와 자연스럽게 대화하듯이 답변해주세요.
 
@@ -89,18 +94,17 @@ class VectorStoreManager:
 답변:"""
 
         PROMPT = PromptTemplate(
-            template=prompt_template,
-            input_variables=["context", "question"]
+            template=prompt_template, input_variables=["context", "question"]
         )
-        
+
         retriever = self.get_retriever()
-        
+
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
             retriever=retriever,
             return_source_documents=True,
-            chain_type_kwargs={"prompt": PROMPT}
+            chain_type_kwargs={"prompt": PROMPT},
         )
-        
+
         return qa_chain
